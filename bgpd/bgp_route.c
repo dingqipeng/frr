@@ -37,6 +37,7 @@
 #include "bgpd/bgp_nhc.h"
 #include "bgpd/bgp_table.h"
 #include "bgpd/bgp_route.h"
+#include "bgpd/bgp_gr_epoch.h"
 #include "bgpd/bgp_attr.h"
 #include "bgpd/bgp_debug.h"
 #include "bgpd/bgp_errors.h"
@@ -818,6 +819,8 @@ void bgp_path_info_unset_flag(struct bgp_dest *dest, struct bgp_path_info *pi,
 			      uint32_t flag)
 {
 	UNSET_FLAG(pi->flags, flag);
+	if (CHECK_FLAG(flag, BGP_PATH_STALE))
+		pi->gr_stale_epoch = 0;
 
 	/* early bath if we know it's not a flag that changes countability state
 	 */
@@ -7585,6 +7588,26 @@ struct bgp_clear_node_queue {
 	struct bgp_dest *dest;
 };
 
+/* Keep refresh staleness separate from a preceding incomplete GR cycle. */
+static bool bgp_clear_retain_path(struct bgp_dest *dest, struct bgp_path_info *pi,
+				  afi_t afi, safi_t safi)
+{
+	struct peer *peer = pi->peer;
+	bool gr = CHECK_FLAG(peer->sflags, PEER_STATUS_NSF_WAIT) && peer->nsf[afi][safi];
+	bool refresh = CHECK_FLAG(peer->af_sflags[afi][safi], PEER_STATUS_ENHANCED_REFRESH);
+	bool llgr = peer->llgr[afi][safi].stale_time ||
+		    event_is_scheduled(peer->t_llgr_stale[afi][safi]);
+
+	if (!bgp_gr_retain_path(gr, refresh, !CHECK_FLAG(pi->flags, BGP_PATH_UNUSEABLE),
+			       CHECK_FLAG(pi->flags, BGP_PATH_STALE), pi->gr_stale_epoch,
+			       peer->gr_clearing_epoch, llgr))
+		return false;
+	if (gr)
+		pi->gr_stale_epoch = peer->gr_clearing_epoch;
+	bgp_path_info_set_flag(dest, pi, BGP_PATH_STALE);
+	return true;
+}
+
 static wq_item_status bgp_clear_route_node(struct work_queue *wq, void *data)
 {
 	struct bgp_clear_node_queue *cnq = data;
@@ -7606,19 +7629,7 @@ static wq_item_status bgp_clear_route_node(struct work_queue *wq, void *data)
 		if (pi->peer != peer)
 			continue;
 
-		/* graceful restart STALE flag set.
-		 * Note: we intentionally do NOT check for BGP_PATH_STALE here.
-		 * A route may already be stale (e.g., from a prior enhanced
-		 * refresh or GR cycle). We must preserve it for the current GR
-		 * cycle rather than deleting it - deletion of stale routes is
-		 * handled by bgp_clear_stale_route() when the appropriate
-		 * timer expires.
-		 */
-		if (((CHECK_FLAG(peer->sflags, PEER_STATUS_NSF_WAIT) && peer->nsf[afi][safi]) ||
-		     CHECK_FLAG(peer->af_sflags[afi][safi], PEER_STATUS_ENHANCED_REFRESH)) &&
-		    !CHECK_FLAG(pi->flags, BGP_PATH_UNUSEABLE)) {
-			bgp_path_info_set_flag(dest, pi, BGP_PATH_STALE);
-		} else {
+		if (!bgp_clear_retain_path(dest, pi, afi, safi)) {
 			/* If this is an EVPN route, process for
 			 * un-import. */
 			if (safi == SAFI_EVPN)
@@ -7867,18 +7878,7 @@ static void clearing_clear_one_pi(struct bgp_table *table, struct bgp_dest *dest
 	afi = table->afi;
 	safi = table->safi;
 
-	/* graceful restart STALE flag set.
-	 * Note: we intentionally do NOT check for BGP_PATH_STALE here.
-	 * A route may already be stale (e.g., from a prior enhanced refresh
-	 * or GR cycle). We must preserve it for the current GR cycle rather
-	 * than deleting it - deletion of stale routes is handled by
-	 * bgp_clear_stale_route() when the appropriate timer expires.
-	 */
-	if (((CHECK_FLAG(pi->peer->sflags, PEER_STATUS_NSF_WAIT) && pi->peer->nsf[afi][safi]) ||
-	     CHECK_FLAG(pi->peer->af_sflags[afi][safi], PEER_STATUS_ENHANCED_REFRESH)) &&
-	    !CHECK_FLAG(pi->flags, BGP_PATH_UNUSEABLE)) {
-		bgp_path_info_set_flag(dest, pi, BGP_PATH_STALE);
-	} else {
+	if (!bgp_clear_retain_path(dest, pi, afi, safi)) {
 		/* If this is an EVPN route, process for un-import. */
 		if (safi == SAFI_EVPN)
 			bgp_evpn_unimport_route(

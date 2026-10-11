@@ -2068,6 +2068,8 @@ struct peer {
 
 	/* workqueues */
 	struct work_queue *clear_node_queue;
+	/* Config-peer lifetime epoch; not overwritten by connection transfer. */
+	uint64_t gr_clearing_epoch;
 
 #define PEER_TOTAL_RX(peer)                                                    \
 	atomic_load_explicit(&peer->open_in, memory_order_relaxed)             \

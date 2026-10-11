@@ -160,6 +160,7 @@ noinst_HEADERS += \
 	bgpd/bgp_regex.h \
 	bgpd/bgp_rpki.h \
 	bgpd/bgp_route.h \
+	bgpd/bgp_gr_epoch.h \
 	bgpd/bgp_routemap_nb.h \
 	bgpd/bgp_script.h \
 	bgpd/bgp_snmp.h \

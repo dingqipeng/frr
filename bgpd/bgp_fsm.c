@@ -2060,6 +2060,11 @@ void bgp_fsm_change_status(struct peer_connection *connection,
 	 * peers is pure overhead.
 	 */
 	if (status >= Clearing && peer_established(connection)) {
+		/* Advance once per established-session loss, before either clearing
+		 * implementation runs. Zero denotes no GR staleness on a path.
+		 */
+		if (++peer->gr_clearing_epoch == 0)
+			++peer->gr_clearing_epoch;
 		bgp_clear_route_all(peer);
 
 		/* If no route was queued for the clear-node processing,

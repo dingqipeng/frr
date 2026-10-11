@@ -333,6 +333,8 @@ struct bgp_path_info {
 
 	/* Uptime.  */
 	time_t uptime;
+	/* Zero for fresh/refresh-only paths; otherwise the GR clearing epoch. */
+	uint64_t gr_stale_epoch;
 
 	/* reference count */
 	int lock;
